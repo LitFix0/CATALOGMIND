@@ -1,0 +1,72 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Virtual Environment
+.venv/
+venv/
+env/
+
+# Environment Variables
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Build
+build/
+dist/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# React Build
+frontend/build/
+frontend/dist/
+
+# Database
+*.db
+*.sqlite3
+
+# Vector Databases
+faiss_index/
+chroma_db/
+chroma/
+vector_store/
+
+# Model Files (optional)
+models/
+checkpoints/
+
+# Uploaded Files (optional)
+uploads/
+temp/
+cache/
+
+# Misc
+*.bak
+*.tmp

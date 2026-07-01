@@ -1,0 +1,21 @@
+# CatalogMind — requirements.txt
+# Layer 1 — API + schemas
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pydantic==2.7.4
+
+# Layer 2 — catalog normalization
+pypdf==4.3.1         # only needed if re-extracting PDF links
+
+# Layer 3 (coming next) — embeddings + FAISS
+# sentence-transformers==3.0.1
+# faiss-cpu==1.8.0
+# numpy==1.26.4
+# torch==2.3.1        # CPU-only is fine for inference
+
+# Layer 11 (coming later) — Groq LLM
+# groq==0.9.0
+
+# Dev/testing
+pytest==8.2.2
+httpx==0.27.0        # needed by FastAPI TestClient
