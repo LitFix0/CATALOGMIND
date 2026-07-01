@@ -36,6 +36,8 @@ logs/
 build/
 dist/
 
+data/
+
 # Jupyter
 .ipynb_checkpoints/
 
