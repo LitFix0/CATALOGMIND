@@ -1,32 +1,72 @@
 """
-Layer 1: FastAPI service shell.
+CatalogMind — Layer 12: Full production app.py.
 
-At this stage there is NO catalog, NO FAISS, NO LLM call yet. The goal is to
-validate the API contract end-to-end:
-  - GET /health
-  - POST /chat with strict request/response schema
-  - basic clarify / refuse / recommend(stub) / compare(stub) branching
+Replaces the Layer 1 stub with the real orchestrator pipeline.
+The /chat route now runs the full stack:
+  request → validate schema → orchestrator.handle() → response
 
-Recommendations are still hardcoded placeholders in this layer so we can
-verify the schema (1-10 items, valid URLs) is wired correctly before the
-real retrieval/reranking pipeline exists.
+Design decisions:
+  - The route itself is intentionally thin — all business logic
+    lives in agent/orchestrator.py. app.py only handles:
+      * Schema validation (Pydantic)
+      * Error coercion to schema-safe responses
+      * FAISS index + model pre-load on startup
+
+  - lifespan() pre-loads FAISS store and embedding model so the
+    first /chat request isn't slow. The evaluator allows up to
+    2 minutes on /health for cold start — we use that budget here.
+
+  - /health returns {"status":"ok"} only when FAISS is loaded.
+    Returns {"status":"not_ready"} with HTTP 200 during startup
+    so the evaluator's health poll can differentiate states.
+
+  - Messages are converted from Pydantic models to plain dicts
+    before passing to the orchestrator — keeps downstream layers
+    free of FastAPI/Pydantic imports.
 """
 
+import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from schemas.chat_schema import ChatRequest, ChatResponse, HealthResponse, Recommendation
-from agent.decision import classify_intent, Intent
+from agent.orchestrator import handle
 
-app = FastAPI(title="SHL Conversational Assessment Recommender")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s — %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        logger.info("CatalogMind startup — pre-loading FAISS store...")
+        from retrieval.faiss_store import store
+        store.load()
+        logger.info("FAISS store loaded: %d items", len(store.catalog))
+
+        logger.info("Pre-loading embedding model...")
+        from ingestion.embeddings import get_model
+        get_model()
+        logger.info("CatalogMind is ready")
+    except Exception as e:
+        logger.error("Startup failed: %s", e)
+    yield
+    logger.info("CatalogMind shutting down")
+
+
+app = FastAPI(
+    title="CatalogMind — Conversational SHL Assessment Recommender",
+    lifespan=lifespan,
+)
 
 
 def _schema_safe_fallback(reply: str) -> JSONResponse:
-    """Always return HTTP 200 with the exact response contract, even on
-    malformed input. The assignment is explicit: 'Never break response
-    schema' — so even client errors are translated into a normal chat
-    reply rather than a raw FastAPI error body."""
+    """Return HTTP 200 with valid schema on any error."""
     return JSONResponse(
         status_code=200,
         content={"reply": reply, "recommendations": [], "end_of_conversation": False},
@@ -34,75 +74,46 @@ def _schema_safe_fallback(reply: str) -> JSONResponse:
 
 
 @app.exception_handler(RequestValidationError)
-def validation_error_handler(request: Request, exc: RequestValidationError):
+async def validation_error_handler(request: Request, exc: RequestValidationError):
     return _schema_safe_fallback(
-        "I couldn't understand that request. Please make sure 'messages' is a "
-        "non-empty list of {role, content} objects and try again."
-    )
-
-
-@app.get("/health", response_model=HealthResponse)
-def health() -> HealthResponse:
-    return HealthResponse(status="ok")
-
-
-@app.post("/chat", response_model=ChatResponse)
-def chat(request: ChatRequest) -> ChatResponse:
-    latest_user_msg = next(
-        (m.content for m in reversed(request.messages) if m.role == "user"),
-        "",
-    )
-    full_history_text = " ".join(m.content for m in request.messages)
-
-    intent = classify_intent(latest_user_msg, full_history_text)
-
-    if intent == Intent.REFUSE:
-        return ChatResponse(
-            reply=(
-                "I can only help with selecting SHL assessments. I can't help "
-                "with that request — feel free to ask about assessments for a role."
-            ),
-            recommendations=[],
-            end_of_conversation=False,
-        )
-
-    if intent == Intent.CLARIFY:
-        return ChatResponse(
-            reply=(
-                "Happy to help. Could you tell me a bit more about the role "
-                "you're hiring for — e.g. job title, seniority, or key skills?"
-            ),
-            recommendations=[],
-            end_of_conversation=False,
-        )
-
-    if intent == Intent.COMPARE:
-        return ChatResponse(
-            reply=(
-                "Comparison logic isn't wired up yet in this layer — "
-                "placeholder response."
-            ),
-            recommendations=[],
-            end_of_conversation=False,
-        )
-
-    # intent == RECOMMEND (stub data; real retrieval comes in a later layer)
-    return ChatResponse(
-        reply="Here is a placeholder shortlist (catalog/retrieval not wired up yet).",
-        recommendations=[
-            Recommendation(
-                name="Placeholder Assessment",
-                url="https://www.shl.com/solutions/products/product-catalog/placeholder/",
-                test_type="K",
-            )
-        ],
-        end_of_conversation=False,
+        "I couldn't understand that request. Please make sure 'messages' "
+        "is a non-empty list of {role, content} objects and try again."
     )
 
 
 @app.exception_handler(Exception)
-def fallback_handler(request: Request, exc: Exception):
-    # Never break the response schema, even on unexpected errors.
+async def fallback_handler(request: Request, exc: Exception):
+    logger.error("Unhandled exception: %s", type(exc).__name__, exc_info=True)
     return _schema_safe_fallback(
         "Something went wrong on our end. Please try rephrasing your request."
     )
+
+
+@app.get("/health", response_model=HealthResponse)
+def health() -> JSONResponse:
+    from retrieval.faiss_store import store
+    if store.is_ready:
+        return JSONResponse(status_code=200, content={"status": "ok"})
+    return JSONResponse(status_code=200, content={"status": "not_ready"})
+
+
+@app.post("/chat", response_model=ChatResponse)
+def chat(request: ChatRequest) -> JSONResponse:
+    # Convert Pydantic models → plain dicts for downstream layers
+    messages = [
+        {"role": m.role.value, "content": m.content}
+        for m in request.messages
+    ]
+
+    result = handle(messages)
+
+    response = ChatResponse(
+        reply=result["reply"],
+        recommendations=[
+            Recommendation(**rec) if isinstance(rec, dict) else rec
+            for rec in result.get("recommendations", [])
+        ],
+        end_of_conversation=result.get("end_of_conversation", False),
+    )
+
+    return JSONResponse(status_code=200, content=response.model_dump())
