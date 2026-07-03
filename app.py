@@ -25,6 +25,9 @@ Design decisions:
     free of FastAPI/Pydantic imports.
 """
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
@@ -33,11 +36,9 @@ from fastapi.responses import JSONResponse
 
 from schemas.chat_schema import ChatRequest, ChatResponse, HealthResponse, Recommendation
 from agent.orchestrator import handle
+from utils.logger import setup_logging
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s — %(message)s",
-)
+setup_logging()
 logger = logging.getLogger(__name__)
 
 
